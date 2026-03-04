@@ -1,0 +1,18 @@
+[project]
+name = "machine-learning"
+version = "0.1.0"
+description = "fahhhhhhh"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "datasets>=4.6.1",
+    "mlcroissant>=1.0.22",
+    "pandas>=3.0.1",
+    "torch>=2.10.0",
+    "torchcodec>=0.10.0",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+]
