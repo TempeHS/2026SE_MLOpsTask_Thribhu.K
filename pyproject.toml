@@ -13,6 +13,8 @@ dependencies = [
     "nltk>=3.9.3",
     "pandas>=3.0.1",
     "scikit-learn>=1.8.0",
+    "seaborn>=0.13.2",
+    "wordcloud>=1.9.6",
 ]
 
 [dependency-groups]
