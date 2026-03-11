@@ -25,26 +25,24 @@ def predict_sentiment_graph(tweet):
     cleaned = clean_tweet(tweet)
     X_tfidf = tfidf.transform([cleaned])
 
-    X = X_tfidf
+    prediction = model.predict(X_tfidf)[0]
+    probability = model.predict_proba(X_tfidf)[0]
 
-    prediction = model.predict(X)[0]
-    probability = model.predict_proba(X)[0]
+    # Binary classification: only 0 (Negative) and 1 (Positive)
+    id_to_name = {0: 'Negative', 1: 'Positive'}
+    id_to_colour = {0: '#e74c3c', 1: '#2ecc71'}
+    
+    labels = [id_to_name[0], id_to_name[1]]
+    colours = [id_to_colour[0], id_to_colour[1]]
 
-    id_to_name = {0: 'Neutral', 1: 'Negative', 2: 'Positive', 3: 'Irrelevant'}
-    id_to_colour = {0: '#95a5a6', 1: '#e74c3c', 2: '#2ecc71', 3: '#3498db'}
-
-    class_ids = list(model.classes_)
-    labels = [id_to_name[c] for c in class_ids]
-    colours = [id_to_colour[c] for c in class_ids]
-
-    fig, ax = plt.subplots(figsize=(8, 4))
+    _fig, ax = plt.subplots(figsize=(8, 4))
     bars = ax.barh(labels, probability * 100, color=colours)
 
-    pred_idx = class_ids.index(prediction)
-    bars[pred_idx].set_edgecolor('black')
-    bars[pred_idx].set_linewidth(2)
+    # Highlight predicted class
+    bars[prediction].set_edgecolor('black')
+    bars[prediction].set_linewidth(2)
 
-    for bar, prob in zip(bars, probability):
+    for i, (bar, prob) in enumerate(zip(bars, probability)):
         ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
                 f'{prob*100:.1f}%', va='center', fontsize=10)
 
