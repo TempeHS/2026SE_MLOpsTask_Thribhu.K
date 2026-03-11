@@ -6,11 +6,14 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "contractions>=0.1.73",
+    "dask>=2026.1.2",
     "datasets>=4.6.1",
     "emoji>=2.15.0",
+    "ipywidgets>=8.1.8",
     "matplotlib>=3.10.8",
     "mlcroissant>=1.0.22",
     "nltk>=3.9.3",
+    "pandarallel>=1.6.5",
     "pandas>=3.0.1",
     "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
