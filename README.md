@@ -11,3 +11,6 @@ then look at the terminal and copy the jupyter server address (probably somethin
 it into vscode. 
 
 if you want, just run it, then quit when safe. it really just needs the .venv to be ready. 
+
+> [!WARNING]
+> You are going to have to deal with 8 million rows of data. This will be extremely resource and time intensive.  
