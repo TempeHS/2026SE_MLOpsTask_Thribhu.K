@@ -3,12 +3,13 @@ name = "machine-learning"
 version = "0.1.0"
 description = "fahhhhhhh"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "contractions>=0.1.73",
     "dask>=2026.1.2",
     "datasets>=4.6.1",
     "emoji>=2.15.0",
+    "flask>=3.1.3",
     "ipywidgets>=8.1.8",
     "matplotlib>=3.10.8",
     "mlcroissant>=1.0.22",
@@ -16,8 +17,10 @@ dependencies = [
     "pandarallel>=1.6.5",
     "pandas>=3.0.1",
     "scikit-learn>=1.8.0",
+    "scipy-stubs~=1.17.1",
     "seaborn>=0.13.2",
     "swifter>=1.4.0",
+    "tqdm>=4.67.3",
     "wordcloud>=1.9.6",
 ]
 

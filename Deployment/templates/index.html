@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Sentiment Calculator</title>
+        <link
+            href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+            rel="stylesheet"
+            integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+            crossorigin="anonymous"
+        />
+    </head>
+    <body class="bg-light">
+        <div class="container mt-5">
+            <h1 class="mb-4">Sentiment Calculator</h1>
+            <form method="POST" action="/analyse">
+                <div class="mb-3">
+                    <textarea
+                        class="form-control"
+                        name="text"
+                        rows="3"
+                        placeholder="Input your text"
+                        required
+                    ></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">Calculate</button>
+            </form>
+
+            {% if result %}
+            {% set intensity = ((result.confidence - 50) / 50) %}
+            {% set intensity = [intensity, 0] | max %}
+            {% if result.sentiment == 'Positive' %}
+                {% set r = (255 * (1 - intensity)) | int %}
+                {% set g = 255 %}
+                {% set b = (255 * (1 - intensity)) | int %}
+            {% else %}
+                {% set r = 255 %}
+                {% set g = (255 * (1 - intensity)) | int %}
+                {% set b = (255 * (1 - intensity)) | int %}
+            {% endif %}
+            <div class="mt-4 alert" style="background-color: rgb({{ r }}, {{ g }}, {{ b }}); border-color: rgb({{ r }}, {{ g }}, {{ b }});">
+                <strong>{{ result.sentiment }}</strong> — {{ result.confidence }}% confidence
+            </div>
+            {% endif %}
+        </div>
+    </body>
+</html>
