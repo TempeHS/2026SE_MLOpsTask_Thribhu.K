@@ -20,7 +20,7 @@ class SentimentAnalyser:
             if not os.path.exists(model_path) or not os.path.exists(tfidf_path):
                 import common.train as train
                 warnings.warn("Training model due to `train-for-me=true` arg being enabled")
-                train.train(path)
+                train.train(csv_folder)
             else:
                 warnings.warn("`train-for-me=true` arg is enabled, however model has been located therefore no need to train")
                 print("Running!")
