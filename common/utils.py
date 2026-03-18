@@ -6,6 +6,10 @@ import joblib
 import contractions
 import matplotlib.pyplot as plt
 import pandas as pd
+from afinn import Afinn
+import scipy.sparse as sp
+
+_afinn = Afinn()
 
 class SentimentAnalyser:
     def __init__(self, csv_folder: str = None, args: list[str] = None):
@@ -44,9 +48,12 @@ class SentimentAnalyser:
     def predict(self, tweet: str, enable_plt: bool = True) -> dict[str, str]:
         cleaned = self.__clean_text(tweet)
         x_tfidf = self.tfidf.transform([cleaned])
+        
+        afinn_score = sp.csr_matrix([[_afinn.score(cleaned)]])
+        x_features = sp.hstack([x_tfidf, afinn_score], format="csr")
 
-        prediction = self.model.predict(x_tfidf)[0]
-        probability = self.model.predict_proba(x_tfidf)[0]
+        prediction = self.model.predict(x_features)[0]
+        probability = self.model.predict_proba(x_features)[0]
 
         id_to_name = {0: 'Negative', 1: 'Positive'}
         id_to_colour = {0: '#e74c3c', 1: '#2ecc71'}
