@@ -16,6 +16,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "mlcroissant>=1.0.22",
     "nltk>=3.9.3",
+    "numpy>=2.4.2",
     "pandarallel>=1.6.5",
     "pandas>=3.0.1",
     "scikit-learn>=1.8.0",
