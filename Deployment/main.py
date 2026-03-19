@@ -156,6 +156,7 @@ def analyse():
         result = model.predict(text, enable_plt=False)
         result["text"] = text
         result["confidence"] = round(float(result["confidence"]), 2)
+        result["request_hash"] = request_hash
         cache_db.get_or_push(request_key, result)
 
     if not _is_authenticated():
@@ -169,6 +170,23 @@ def analyse():
     session["result_id"] = result_id
 
     return redirect(url_for("index"))
+
+@app.route("/feedback", methods=["POST"])
+def feedback():
+    _validate_csrf()
+    if not _is_authenticated():
+        return {"error": "Login required to submit feedback."}, 401
+
+    request_hash = request.form.get("request_hash", "").strip()
+    is_correct_str = request.form.get("is_correct", "")
+
+    if not request_hash or is_correct_str not in ("true", "false"):
+        return {"error": "Invalid input."}, 400
+
+    cache_db.upsert_feedback(request_hash, session["user_id"], is_correct_str == "true")
+    return {"ok": True}, 200
+
+# authentication stuff after here =====================================================================
 
 @app.route("/login", methods=["POST"])
 def login():

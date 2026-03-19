@@ -58,22 +58,36 @@ class CacheDatabase(DatabaseHandler):
     def __init__(self, path: str):
         super().__init__(path)
         self.init_schema()
-
+    
     def init_schema(self) -> None:
         self.execute(
             """
             CREATE TABLE IF NOT EXISTS cache_entries (
-                request_hash TEXT PRIMARY KEY,
-                request_json TEXT NOT NULL,
+                request_hash  TEXT PRIMARY KEY,
+                request_json  TEXT NOT NULL,
                 response_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                hit_count INTEGER NOT NULL DEFAULT 0
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                hit_count     INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        self.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prediction_feedback (
+                feedback_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_hash TEXT NOT NULL,
+                user_id      INTEGER NOT NULL,
+                is_correct   INTEGER NOT NULL CHECK(is_correct IN (0, 1)),
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                UNIQUE(user_id, request_hash),
+                FOREIGN KEY(request_hash) REFERENCES cache_entries(request_hash) ON DELETE CASCADE
             )
             """
         )
         self.commit()
-
+    
     @staticmethod
     def _stable_json(data: Any) -> str:
         return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -156,6 +170,29 @@ class CacheDatabase(DatabaseHandler):
 
         self.set_entry(data, response_data)
         return response_data, False, request_hash
+    
+    def upsert_feedback(self, request_hash: str, user_id: int, is_correct: bool) -> None:
+        """Record or update a user's feedback on a prediction. One vote per user per prediction."""
+        now = self._utc_now_iso()
+        self.execute(
+            """
+            INSERT INTO prediction_feedback (request_hash, user_id, is_correct, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, request_hash) DO UPDATE SET
+                is_correct = excluded.is_correct,
+                updated_at = excluded.updated_at
+            """,
+            (request_hash, user_id, int(is_correct), now, now),
+        )
+        self.commit()
+
+    def get_user_feedback(self, request_hash: str, user_id: int) -> Optional[bool]:
+        """Returns the user's existing vote for this prediction, or None if they haven't voted."""
+        row = self.fetchone(
+            "SELECT is_correct FROM prediction_feedback WHERE request_hash = ? AND user_id = ?",
+            (request_hash, user_id),
+        )
+        return bool(row["is_correct"]) if row else None
 
 
 class UserDatabase(DatabaseHandler):
@@ -180,8 +217,7 @@ class UserDatabase(DatabaseHandler):
             )
             """
         )
-        for col, definition in [("email", "TEXT NOT NULL DEFAULT ''"),
-                                ("password_hash", "TEXT NOT NULL DEFAULT ''")]:
+        for col, definition in [("email", "TEXT NOT NULL DEFAULT ''"), ("password_hash", "TEXT NOT NULL DEFAULT ''")]:
             try:
                 self.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
                 self.commit()
