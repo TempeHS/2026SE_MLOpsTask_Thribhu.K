@@ -7,3 +7,4 @@ Model_Development/csv/*
 !Model_Development/csv/tfidf_dump.pkl
 
 .env
+*.db

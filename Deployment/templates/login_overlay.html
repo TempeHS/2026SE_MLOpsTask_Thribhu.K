@@ -1,0 +1,188 @@
+<div
+  id="authOverlay"
+  style="
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 1050;
+    align-items: center;
+    justify-content: center;
+  "
+  aria-modal="true"
+  role="dialog"
+  aria-labelledby="authOverlayTitle"
+>
+  <div
+    style="
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+      width: 100%;
+      max-width: 420px;
+      margin: 1rem;
+      padding: 2rem;
+      position: relative;
+    "
+  >
+    <!-- Close button -->
+    <button
+      type="button"
+      aria-label="Close"
+      onclick="document.getElementById('authOverlay').style.display='none'"
+      style="
+        position: absolute;
+        top: 0.75rem;
+        right: 0.9rem;
+        background: none;
+        border: none;
+        font-size: 1.4rem;
+        line-height: 1;
+        color: #666;
+        cursor: pointer;
+      "
+    >&times;</button>
+
+    <!-- Tabs -->
+    <ul class="nav nav-tabs mb-4" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link active"
+          id="signin-tab"
+          type="button"
+          role="tab"
+          onclick="authSwitchTab('signin')"
+        >Sign In</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link"
+          id="signup-tab"
+          type="button"
+          role="tab"
+          onclick="authSwitchTab('signup')"
+        >Create Account</button>
+      </li>
+    </ul>
+
+    <div>
+      <!-- ── Sign In ─────────────────────────────────── -->
+      <div id="signinPane">
+        <h5 id="authOverlayTitle" class="mb-3 fw-semibold">Welcome back</h5>
+        <form method="POST" action="/login">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+
+          <div class="mb-3">
+            <label for="signin_identity" class="form-label">Username or Email</label>
+            <input
+              type="text"
+              class="form-control"
+              id="signin_identity"
+              name="identity"
+              autocomplete="username"
+              required
+              placeholder="you@example.com"
+            />
+          </div>
+
+          <div class="mb-3">
+            <label for="signin_password" class="form-label">Password</label>
+            <input
+              type="password"
+              class="form-control"
+              id="signin_password"
+              name="password"
+              autocomplete="current-password"
+              required
+              placeholder="••••••••"
+            />
+          </div>
+
+          {% if signin_error %}
+          <div class="alert alert-danger py-2 mb-3">{{ signin_error }}</div>
+          {% endif %}
+
+          <div class="d-grid">
+            <button type="submit" class="btn btn-primary">Sign In</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- ── Sign Up ─────────────────────────────────── -->
+      <div id="signupPane" style="display:none;">
+        <h5 class="mb-3 fw-semibold">Create your account</h5>
+        <form method="POST" action="/register">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+
+          <div class="mb-3">
+            <label for="signup_username" class="form-label">Username</label>
+            <input
+              type="text"
+              class="form-control"
+              id="signup_username"
+              name="username"
+              autocomplete="username"
+              required
+              minlength="3"
+              maxlength="32"
+              pattern="[A-Za-z0-9_\-]+"
+              placeholder="your_handle"
+              title="3–32 characters: letters, numbers, _ or -"
+            />
+            <div class="form-text">Letters, numbers, _ and - only.</div>
+          </div>
+
+          <div class="mb-3">
+            <label for="signup_email" class="form-label">Email</label>
+            <input
+              type="email"
+              class="form-control"
+              id="signup_email"
+              name="email"
+              autocomplete="email"
+              required
+              placeholder="you@example.com"
+            />
+          </div>
+
+          <div class="mb-3">
+            <label for="signup_password" class="form-label">Password</label>
+            <input
+              type="password"
+              class="form-control"
+              id="signup_password"
+              name="password"
+              autocomplete="new-password"
+              required
+              minlength="8"
+              placeholder="••••••••"
+            />
+            <div class="form-text">Minimum 8 characters.</div>
+          </div>
+
+          {% if signup_error %}
+          <div class="alert alert-danger py-2 mb-3">{{ signup_error }}</div>
+          {% endif %}
+
+          <div class="d-grid">
+            <button type="submit" class="btn btn-success">Create Account</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function authSwitchTab(tab) {
+    var isSignin = tab === 'signin';
+    document.getElementById('signinPane').style.display = isSignin ? 'block' : 'none';
+    document.getElementById('signupPane').style.display = isSignin ? 'none'  : 'block';
+    document.getElementById('signin-tab').classList.toggle('active', isSignin);
+    document.getElementById('signup-tab').classList.toggle('active', !isSignin);
+  }
+
+  document.getElementById('authOverlay').addEventListener('click', function(e) {
+    if (e.target === this) this.style.display = 'none';
+  });
+</script>

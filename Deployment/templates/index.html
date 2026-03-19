@@ -141,7 +141,20 @@
   </head>
   <body class="bg-light">
     <div class="container mt-5 d-flex flex-column align-items-center">
-      <h1 class="mb-4 text-center">Sentiment Calculator</h1>
+      <div style="width:100%; max-width:650px; display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+        <h1 class="m-0">Sentiment Calculator</h1>
+        {% if is_authenticated %}
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-muted" style="font-size:0.9rem;">{{ username }}</span>
+          <a href="/logout" class="btn btn-outline-secondary btn-sm">Sign Out</a>
+        </div>
+        {% else %}
+        <button type="button" class="btn btn-outline-primary btn-sm"
+          onclick="document.getElementById('authOverlay').style.display='flex'">
+          Sign In
+        </button>
+        {% endif %}
+      </div>
 
       <form
         method="POST"
@@ -183,6 +196,18 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
         <div class="text-center">
           <button type="submit" class="btn btn-primary px-4">Calculate</button>
+          {% if not is_authenticated %}
+          <div class="form-text text-center mt-2">
+            Free analyses remaining: <strong>{{ free_tries_remaining }} / {{ free_tries_limit }}</strong>
+            {% if free_tries_remaining == 0 %}
+            — <button type="button" class="btn btn-link p-0 align-baseline"
+                onclick="document.getElementById('authOverlay').style.display='flex';
+                          document.getElementById('signup-tab').click();">
+                Create an account
+              </button> to continue.
+            {% endif %}
+          </div>
+          {% endif %}
         </div>
       </form>
 
@@ -357,5 +382,24 @@
       </script>
       {% endif %}
     </div>
+
+    <footer class="text-center text-muted mt-5 mb-4" style="font-size: 0.85rem;">
+        made with love and pressure by <a href="https://github.com/TempeHS/2026SE_MLOpsTask_Thribhu.K" target="_blank" rel="noopener noreferrer" class="text-muted">Thribhu K</a> ❤️
+    </footer>
+
+    {% include 'login_overlay.html' %}
+
+    {% if open_overlay_tab %}
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        document.getElementById('authOverlay').style.display = 'flex';
+        authSwitchTab('{{ open_overlay_tab }}');
+      });
+    </script>
+    {% endif %}
+
+    {% for entry in console_logs | default([]) %}
+    <script>console.log({{ entry | tojson | safe }});</script>
+    {% endfor %}
   </body>
 </html>
