@@ -24,6 +24,8 @@ n_jobs = 2
 _PUNCT = re.compile(r"[^\w\s]")
 _sbert = SentenceTransformer("all-MiniLM-L6-v2")
 
+SOURCE2_SAMPLE = 500_000
+
 
 def _tokenise_row(text, stop_words):
     try:
@@ -74,15 +76,13 @@ def train(csv_folder: str = None):
             dynamic_ncols=True,
         ) as pbar:
 
-            # ------------------------------------------------------------------ #
-            # Stage 1+2 — Load & clean                                           #
-            # ------------------------------------------------------------------ #
             if os.path.exists(CP_ALL_DATA):
                 tqdm.write(f"[checkpoint] Skipping load+clean, reading {CP_ALL_DATA}")
                 df = pd.read_parquet(CP_ALL_DATA)
                 pbar.update(2)
             else:
                 pbar.set_description("Loading datasets")
+
                 croissant_dataset = mlc.Dataset(
                     "https://www.kaggle.com/datasets/jp797498e/twitter-entity-sentiment-analysis/croissant/download"
                 )
@@ -90,13 +90,23 @@ def train(csv_folder: str = None):
                 df1 = pd.DataFrame(
                     croissant_dataset.records(record_set=record_sets[0].uuid)
                 )
+                tqdm.write(f"  Source 1 (Kaggle) raw rows: {len(df1):,}")
+
                 ds = load_dataset("NNEngine/Sentiment-Analysis-Complex", split="train")
                 df2 = ds.to_pandas()
+                tqdm.write(f"  Source 2 (HuggingFace) total rows: {len(df2):,}")
+                if len(df2) > SOURCE2_SAMPLE:
+                    df2 = df2.sample(n=SOURCE2_SAMPLE, random_state=42).reset_index(drop=True)
+                    tqdm.write(f"  Source 2 sampled down to {SOURCE2_SAMPLE:,} rows")
+                else:
+                    tqdm.write(
+                        f"  Source 2 has fewer than {SOURCE2_SAMPLE:,} rows — using all {len(df2):,}"
+                    )
+
                 pbar.update(1)
 
                 pbar.set_description("Cleaning data")
 
-                # --- clean df1 (Kaggle twitter dataset) ---
                 df = df1.drop(
                     columns=[
                         "twitter_training.csv/2401",
@@ -110,13 +120,12 @@ def train(csv_folder: str = None):
                         lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
                     )
 
-                # --- clean df2 (HuggingFace dataset) ---
                 df2 = df2.rename(columns={"label": "Sentiment", "text": "Text Content"})
                 df2["Sentiment"] = df2["Sentiment"].astype(str).str.lower()
                 df2 = df2.drop(columns=["id"])
 
-                # --- merge & deduplicate ---
                 df = pd.concat([df, df2], ignore_index=True)
+                tqdm.write(f"  Combined rows before dedup: {len(df):,}")
                 df["Sentiment"] = df["Sentiment"].str.lower()
                 df["Text Content"] = (
                     df["Text Content"]
@@ -130,15 +139,14 @@ def train(csv_folder: str = None):
                     .sample(frac=1)
                     .reset_index(drop=True)
                 )
+                tqdm.write(f"  Combined rows after dedup+shuffle: {len(df):,}")
                 df.to_parquet(
                     CP_ALL_DATA, index=False, engine="pyarrow", compression="snappy"
                 )
                 pbar.update(1)
                 del df1, df2, ds
 
-            # ------------------------------------------------------------------ #
-            # Stage 3+4 — Preprocess & tokenise                                 #
-            # ------------------------------------------------------------------ #
+            # preprocess + tokenisation
             if os.path.exists(CP_PREPROCESS):
                 tqdm.write(
                     f"[checkpoint] Skipping preprocess+tokenise, reading {CP_PREPROCESS}"
@@ -232,9 +240,7 @@ def train(csv_folder: str = None):
                 )
                 pbar.update(1)
 
-            # ------------------------------------------------------------------ #
-            # Stage 5 — Vectorise (TF-IDF + SBERT)                              #
-            # ------------------------------------------------------------------ #
+            # vectorise
             if (
                 os.path.exists(CP_X_FEATURES)
                 and os.path.exists(CP_TFIDF)
@@ -250,13 +256,11 @@ def train(csv_folder: str = None):
             else:
                 pbar.set_description("Vectorising (TF-IDF + SBERT)")
 
-                # TF-IDF on tokenised text
                 tfidf = TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
                 texts_for_tfidf = df["Text Tokens"].apply(" ".join)
                 X_tfidf = tfidf.fit_transform(texts_for_tfidf)
                 tqdm.write(f"  TF-IDF shape: {X_tfidf.shape}")
 
-                # SBERT sentence embeddings — captures full sentence context
                 raw_texts = df["Mutated Text Content"].fillna("").tolist()
                 if os.path.exists(CP_SBERT):
                     tqdm.write(f"[checkpoint] Loading SBERT embeddings from {CP_SBERT}")
@@ -285,9 +289,7 @@ def train(csv_folder: str = None):
                 y.to_csv(CP_Y_LABELS, index=False)
                 pbar.update(1)
 
-            # ------------------------------------------------------------------ #
-            # Stage 6+7 — Train & save                                           #
-            # ------------------------------------------------------------------ #
+            # save model
             if (
                 os.path.exists(CP_MODEL)
                 and os.path.exists(CP_X_TEST)

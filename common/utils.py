@@ -6,11 +6,11 @@ import joblib
 import contractions
 import matplotlib.pyplot as plt
 import pandas as pd
-from afinn import Afinn
 import scipy.sparse as sp
 import numpy as np
+from sentence_transformers import SentenceTransformer
 
-_afinn = Afinn()
+_sbert = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 class SentimentAnalyser:
@@ -54,10 +54,10 @@ class SentimentAnalyser:
 
     def predict(self, tweet: str, enable_plt: bool = True) -> dict:
         cleaned = self.__clean_text(tweet)
-        x_tfidf = self.tfidf.transform([cleaned])
 
-        afinn_score = sp.csr_matrix([[_afinn.score(cleaned)]])
-        x_features = sp.hstack([x_tfidf, afinn_score], format="csr")
+        x_tfidf = self.tfidf.transform([cleaned])
+        sbert_vec = _sbert.encode([cleaned], convert_to_numpy=True).astype(np.float32)
+        x_features = sp.hstack([x_tfidf, sp.csr_matrix(sbert_vec)], format="csr")
 
         prediction = self.model.predict(x_features)[0]
         probability = self.model.predict_proba(x_features)[0]
@@ -65,57 +65,31 @@ class SentimentAnalyser:
         id_to_name = {0: "Negative", 1: "Positive"}
         id_to_colour = {0: "#e74c3c", 1: "#2ecc71"}
 
-        # --- Word weights ---
         words = cleaned.split()
         tfidf_feature_names = np.array(self.tfidf.get_feature_names_out())
-        coef = self.model.coef_[0]
 
-        # get max abs coef for scaling AFINN into the same range
-        coef_max = np.max(np.abs(coef)) if len(coef) > 0 else 1.0
+        n_tfidf = x_tfidf.shape[1]
+        coef_tfidf = self.model.coef_[0, :n_tfidf]
 
         word_weights = {}
-        word_sources = {}  # track where each weight came from
         for word in words:
             matches = np.where(tfidf_feature_names == word)[0]
             if len(matches) > 0:
                 idx = matches[0]
-                tfidf_val = x_tfidf[0, idx]
-                weight = coef[idx] * tfidf_val
-                if weight != 0.0:
-                    word_weights[word] = float(weight)
-                    word_sources[word] = "model"
-                else:
-                    # in vocab but zero tfidf — scale AFINN to coef range
-                    afinn_val = _afinn.score(word)
-                    word_weights[word] = float(afinn_val) / 5.0 * coef_max
-                    word_sources[word] = "afinn"
+                word_weights[word] = float(coef_tfidf[idx] * x_tfidf[0, idx])
             else:
-                # not in vocab — scale AFINN to same range as model coefficients
-                afinn_val = _afinn.score(word)
-                word_weights[word] = float(afinn_val) / 5.0 * coef_max
-                word_sources[word] = "afinn"
+                word_weights[word] = 0.0
 
-        # normalise ALL weights together to [-1, 1] for consistent colouring
         all_vals = list(word_weights.values())
         max_abs = max(abs(v) for v in all_vals) if all_vals else 1.0
         if max_abs == 0:
             max_abs = 1.0
         word_weights_norm = {w: v / max_abs for w, v in word_weights.items()}
 
-        # build token list with weights for the original tweet
-        original_words = tweet.split()
         token_weights = []
-        for orig in original_words:
+        for orig in tweet.split():
             clean = self.__clean_text(orig)
-            weight = word_weights_norm.get(clean, 0.0)
-            source = word_sources.get(clean, "unknown")
-            token_weights.append(
-                {
-                    "word": orig,
-                    "weight": round(weight, 4),
-                    "source": source,  # "model" or "afinn" — useful for debugging
-                }
-            )
+            token_weights.append({"word": orig, "weight": round(word_weights_norm.get(clean, 0.0), 4)})
 
         if enable_plt:
             labels = [id_to_name[0], id_to_name[1]]
@@ -126,7 +100,6 @@ class SentimentAnalyser:
             ax2 = fig.add_subplot(1, 3, 2)
             ax3 = fig.add_subplot(1, 3, 3)
 
-            # --- Bar chart ---
             bars = ax1.barh(labels, probability * 100, color=colours)
             bars[prediction].set_edgecolor("black")
             bars[prediction].set_linewidth(2)
@@ -142,20 +115,13 @@ class SentimentAnalyser:
             ax1.set_xlabel("Confidence (%)")
             ax1.set_title("Prediction Confidence")
 
-            # --- Sigmoid ---
             x = np.linspace(-8, 8, 300)
             sigmoid = 1 / (1 + np.exp(-x))
             pos_prob = probability[1]
             sigmoid_x = np.log(pos_prob / (1 - pos_prob + 1e-9))
             sigmoid_x = np.clip(sigmoid_x, -8, 8)
             ax2.plot(x, sigmoid, color="steelblue", linewidth=2, label="Sigmoid curve")
-            ax2.axhline(
-                0.5,
-                color="gray",
-                linestyle="--",
-                linewidth=1,
-                label="Decision boundary (0.5)",
-            )
+            ax2.axhline(0.5, color="gray", linestyle="--", linewidth=1, label="Decision boundary (0.5)")
             ax2.axvline(
                 sigmoid_x,
                 color=id_to_colour[prediction],
@@ -177,16 +143,10 @@ class SentimentAnalyser:
             ax2.set_ylim(-0.05, 1.05)
             ax2.legend(fontsize=8)
 
-            # --- Word weight chart ---
             sorted_words = sorted(word_weights.items(), key=lambda x: x[1])
-            w_labels = [
-                f"{w} {'(afinn)' if word_sources.get(w) == 'afinn' else ''}"
-                for w, _ in sorted_words
-            ]
+            w_labels = [w for w, _ in sorted_words]
             w_values = [v for _, v in sorted_words]
-            bar_colours = [
-                id_to_colour[1] if v >= 0 else id_to_colour[0] for v in w_values
-            ]
+            bar_colours = [id_to_colour[1] if v >= 0 else id_to_colour[0] for v in w_values]
             ax3.barh(w_labels, w_values, color=bar_colours)
             ax3.axvline(0, color="black", linewidth=0.8)
             ax3.set_xlabel("Weight Contribution (model coef scale)")
