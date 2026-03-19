@@ -14,17 +14,31 @@ import joblib
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-from tqdm import tqdm
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    BarColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    MofNCompleteColumn,
+)
+from rich.console import Console
 from sentence_transformers import SentenceTransformer
+import gc
 
-tqdm.pandas()
+console = Console()
 
 n_jobs = 2
 
 _PUNCT = re.compile(r"[^\w\s]")
 _sbert = SentenceTransformer("all-MiniLM-L6-v2")
 
+# change me for a higher sample rate from source 2 (hugging face)
 SOURCE2_SAMPLE = 500_000
+
+TFIDF_CHUNK = 50_000
+SBERT_BATCH = 256
 
 
 def _tokenise_row(text, stop_words):
@@ -38,6 +52,20 @@ def _tokenise_row(text, stop_words):
         ]
     except Exception:
         return []
+
+
+def _make_progress() -> Progress:
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(bar_width=40),
+        MofNCompleteColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        transient=False,
+    )
 
 
 def train(csv_folder: str = None):
@@ -67,45 +95,40 @@ def train(csv_folder: str = None):
     ]
 
     try:
-        with tqdm(
-            total=len(stages),
-            desc="Training pipeline",
-            unit="stage",
-            position=0,
-            leave=True,
-            dynamic_ncols=True,
-        ) as pbar:
+        with _make_progress() as progress:
+            pipeline = progress.add_task("[bold green]Training pipeline", total=len(stages))
 
             if os.path.exists(CP_ALL_DATA):
-                tqdm.write(f"[checkpoint] Skipping load+clean, reading {CP_ALL_DATA}")
+                console.log(f"[checkpoint] Skipping load+clean, reading {CP_ALL_DATA}")
                 df = pd.read_parquet(CP_ALL_DATA)
-                pbar.update(2)
+                progress.advance(pipeline, 2)
             else:
-                pbar.set_description("Loading datasets")
-
+                progress.update(pipeline, description="Loading datasets")
                 croissant_dataset = mlc.Dataset(
                     "https://www.kaggle.com/datasets/jp797498e/twitter-entity-sentiment-analysis/croissant/download"
                 )
                 record_sets = croissant_dataset.metadata.record_sets
-                df1 = pd.DataFrame(
-                    croissant_dataset.records(record_set=record_sets[0].uuid)
+                raw_records = croissant_dataset.records(record_set=record_sets[0].uuid)
+                kaggle_task = progress.add_task("  Loading Kaggle records", total=None)
+                records = []
+                for r in raw_records:
+                    records.append(r)
+                    progress.advance(kaggle_task)
+                progress.remove_task(kaggle_task)
+                df1 = pd.DataFrame(records)
+                del records
+                console.log(f"  Source 1 (Kaggle) raw rows: {len(df1):,}")
+
+                ds = load_dataset(
+                    "NNEngine/Sentiment-Analysis-Complex",
+                    split=f"train[:{SOURCE2_SAMPLE}]",
                 )
-                tqdm.write(f"  Source 1 (Kaggle) raw rows: {len(df1):,}")
-
-                ds = load_dataset("NNEngine/Sentiment-Analysis-Complex", split="train")
                 df2 = ds.to_pandas()
-                tqdm.write(f"  Source 2 (HuggingFace) total rows: {len(df2):,}")
-                if len(df2) > SOURCE2_SAMPLE:
-                    df2 = df2.sample(n=SOURCE2_SAMPLE, random_state=42).reset_index(drop=True)
-                    tqdm.write(f"  Source 2 sampled down to {SOURCE2_SAMPLE:,} rows")
-                else:
-                    tqdm.write(
-                        f"  Source 2 has fewer than {SOURCE2_SAMPLE:,} rows — using all {len(df2):,}"
-                    )
+                del ds
+                console.log(f"  Source 2 (HuggingFace) loaded rows: {len(df2):,}")
+                progress.advance(pipeline)
 
-                pbar.update(1)
-
-                pbar.set_description("Cleaning data")
+                progress.update(pipeline, description="Cleaning data")
 
                 df = df1.drop(
                     columns=[
@@ -119,114 +142,114 @@ def train(csv_folder: str = None):
                     df[col] = df[col].apply(
                         lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
                     )
+                del df1
 
                 df2 = df2.rename(columns={"label": "Sentiment", "text": "Text Content"})
                 df2["Sentiment"] = df2["Sentiment"].astype(str).str.lower()
                 df2 = df2.drop(columns=["id"])
 
                 df = pd.concat([df, df2], ignore_index=True)
-                tqdm.write(f"  Combined rows before dedup: {len(df):,}")
+                del df2
+                gc.collect()
+
+                console.log(f"  Combined rows before dedup: {len(df):,}")
                 df["Sentiment"] = df["Sentiment"].str.lower()
-                df["Text Content"] = (
-                    df["Text Content"]
-                    .str.replace("<unk>", "", regex=False)
-                    .str.replace(r"\s+", " ", regex=True)
-                    .str.strip()
-                )
+
+                combined_cleaning_steps = [
+                    ("Stripping <unk>", lambda s: s.str.replace("<unk>", "", regex=False)),
+                    ("Collapsing whitespace", lambda s: s.str.replace(r"\s+", " ", regex=True)),
+                    ("Stripping edges", lambda s: s.str.strip()),
+                ]
+                clean_task = progress.add_task("  Cleaning combined text", total=len(combined_cleaning_steps))
+                col = df["Text Content"]
+                for desc, fn in combined_cleaning_steps:
+                    progress.update(clean_task, description=f"  {desc}")
+                    col = fn(col)
+                    progress.advance(clean_task)
+                progress.remove_task(clean_task)
+                df["Text Content"] = col
+                del col
+
                 df = (
-                    df[df["Text Content"].str.strip().str.len() > 0]
+                    df[df["Text Content"].str.len() > 0]
                     .drop_duplicates(subset="Text Content")
                     .sample(frac=1)
                     .reset_index(drop=True)
                 )
-                tqdm.write(f"  Combined rows after dedup+shuffle: {len(df):,}")
-                df.to_parquet(
-                    CP_ALL_DATA, index=False, engine="pyarrow", compression="snappy"
-                )
-                pbar.update(1)
-                del df1, df2, ds
+                console.log(f"  Combined rows after dedup+shuffle: {len(df):,}")
+                df.to_parquet(CP_ALL_DATA, index=False, engine="pyarrow", compression="snappy")
+                progress.advance(pipeline)
+                gc.collect()
 
-            # preprocess + tokenisation
             if os.path.exists(CP_PREPROCESS):
-                tqdm.write(
-                    f"[checkpoint] Skipping preprocess+tokenise, reading {CP_PREPROCESS}"
-                )
+                console.log(f"[checkpoint] Skipping preprocess+tokenise, reading {CP_PREPROCESS}")
                 df = pd.read_parquet(CP_PREPROCESS)
                 df["Text Tokens"] = df["Text Tokens"].apply(
                     lambda x: x if isinstance(x, list) else list(x)
                 )
-                pbar.update(2)
+                progress.advance(pipeline, 2)
             else:
-                pbar.set_description("Preprocessing text")
-                nltk.download("stopwords", quiet=True)
-                nltk.download("twitter_samples", quiet=True)
-                nltk.download("wordnet", quiet=True)
-                nltk.download("averaged_perceptron_tagger_eng", quiet=True)
-                nltk.download("punkt_tab", quiet=True)
+                progress.update(pipeline, description="Preprocessing text")
+                nltk_resources = [
+                    "stopwords",
+                    "twitter_samples",
+                    "wordnet",
+                    "averaged_perceptron_tagger_eng",
+                    "punkt_tab",
+                ]
+                nltk_task = progress.add_task("  Downloading NLTK data", total=len(nltk_resources))
+                for resource in nltk_resources:
+                    nltk.download(resource, quiet=True)
+                    progress.advance(nltk_task)
+                progress.remove_task(nltk_task)
 
                 stop_words = set(stopwords.words("english")) - {
-                    "no",
-                    "not",
-                    "nor",
-                    "neither",
-                    "never",
-                    "none",
-                    "don't",
-                    "won't",
-                    "can't",
-                    "isn't",
-                    "aren't",
-                    "wasn't",
+                    "no", "not", "nor", "neither", "never", "none",
+                    "don't", "won't", "can't", "isn't", "aren't", "wasn't",
                 }
 
                 cleaning_steps = [
-                    (
-                        "Removing non-ASCII",
-                        lambda s: s.str.replace(r"[^\x00-\x7F]+", "", regex=True),
-                    ),
-                    (
-                        "Removing URLs",
-                        lambda s: s.str.replace(r"http\S+|www\.\S+", "", regex=True),
-                    ),
-                    (
-                        "Removing hashtags",
-                        lambda s: s.str.replace(r"#\w+", "", regex=True),
-                    ),
-                    (
-                        "Removing HTML entities",
-                        lambda s: s.str.replace(r"&\w+;", "", regex=True),
-                    ),
+                    ("Removing non-ASCII", lambda s: s.str.replace(r"[^\x00-\x7F]+", "", regex=True)),
+                    ("Removing URLs", lambda s: s.str.replace(r"http\S+|www\.\S+", "", regex=True)),
+                    ("Removing hashtags", lambda s: s.str.replace(r"#\w+", "", regex=True)),
+                    ("Removing HTML entities", lambda s: s.str.replace(r"&\w+;", "", regex=True)),
                     ("Expanding contractions", lambda s: s.apply(contractions.fix)),
                     ("Lowercasing", lambda s: s.str.lower().str.strip()),
                 ]
-
+                text_task = progress.add_task("  Cleaning text", total=len(cleaning_steps))
                 col = df["Text Content"].fillna("")
-                for desc, fn in tqdm(
-                    cleaning_steps, desc="  Cleaning text", position=1, leave=False
-                ):
+                for desc, fn in cleaning_steps:
+                    progress.update(text_task, description=f"  {desc}")
                     col = fn(col)
+                    progress.advance(text_task)
+                progress.remove_task(text_task)
                 df["Mutated Text Content"] = col
                 df = df.drop(columns=["Text Content"]).reset_index(drop=True)
-                pbar.update(1)
+                del col
+                gc.collect()
+                progress.advance(pipeline)
 
-                pbar.set_description("Tokenising")
+                progress.update(pipeline, description="Tokenising")
                 CHUNK = 50_000
                 texts = df["Mutated Text Content"].tolist()
                 results = []
-                for i in tqdm(
-                    range(0, len(texts), CHUNK),
-                    desc="  Tokenising chunks",
-                    position=1,
-                    leave=False,
-                ):
+                chunk_task = progress.add_task("  Tokenising chunks", total=len(texts))
+                for i in range(0, len(texts), CHUNK):
                     chunk = texts[i : i + CHUNK]
-                    results.extend(
-                        Parallel(n_jobs=n_jobs, backend="loky")(
-                            delayed(_tokenise_row)(t, stop_words) for t in chunk
-                        )
+                    row_task = progress.add_task("    Rows in chunk", total=len(chunk))
+                    batch = Parallel(n_jobs=n_jobs, backend="loky")(
+                        delayed(_tokenise_row)(t, stop_words) for t in chunk
                     )
+                    results.extend(batch)
+                    progress.advance(chunk_task, len(chunk))
+                    progress.remove_task(row_task)
+                progress.remove_task(chunk_task)
+                del texts
+                gc.collect()
 
                 df["Text Tokens"] = results
+                del results
+
                 df = (
                     df[df["Text Tokens"].apply(len) > 0]
                     .loc[df["Sentiment"].isin(["positive", "negative"])]
@@ -235,94 +258,130 @@ def train(csv_folder: str = None):
                 df["Sentiment"] = (
                     df["Sentiment"].map({"positive": 1, "negative": 0}).astype("int8")
                 )
-                df.to_parquet(
-                    CP_PREPROCESS, index=False, engine="pyarrow", compression="snappy"
-                )
-                pbar.update(1)
+                df.to_parquet(CP_PREPROCESS, index=False, engine="pyarrow", compression="snappy")
+                progress.advance(pipeline)
+                gc.collect()
 
-            # vectorise
             if (
                 os.path.exists(CP_X_FEATURES)
                 and os.path.exists(CP_TFIDF)
                 and os.path.exists(CP_Y_LABELS)
             ):
-                tqdm.write(
-                    f"[checkpoint] Skipping vectorising, reading {CP_X_FEATURES}"
-                )
+                console.log(f"[checkpoint] Skipping vectorising, reading {CP_X_FEATURES}")
                 X = sp.load_npz(CP_X_FEATURES)
                 tfidf = joblib.load(CP_TFIDF)
                 y = pd.read_csv(CP_Y_LABELS).squeeze()
-                pbar.update(1)
+                progress.advance(pipeline)
             else:
-                pbar.set_description("Vectorising (TF-IDF + SBERT)")
+                progress.update(pipeline, description="Vectorising (TF-IDF + SBERT)")
 
+                texts_for_tfidf = df["Text Tokens"].apply(" ".join).tolist()
+
+                fit_task = progress.add_task("  TF-IDF fitting vocab", total=None)
                 tfidf = TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
-                texts_for_tfidf = df["Text Tokens"].apply(" ".join)
-                X_tfidf = tfidf.fit_transform(texts_for_tfidf)
-                tqdm.write(f"  TF-IDF shape: {X_tfidf.shape}")
+                tfidf.fit(texts_for_tfidf)
+                progress.remove_task(fit_task)
+
+                tfidf_chunks = []
+                tfidf_task = progress.add_task("  TF-IDF transform", total=len(texts_for_tfidf))
+                for i in range(0, len(texts_for_tfidf), TFIDF_CHUNK):
+                    chunk = texts_for_tfidf[i : i + TFIDF_CHUNK]
+                    tfidf_chunks.append(tfidf.transform(chunk))
+                    progress.advance(tfidf_task, len(chunk))
+                progress.remove_task(tfidf_task)
+                X_tfidf = sp.vstack(tfidf_chunks, format="csr")
+                del tfidf_chunks, texts_for_tfidf
+                gc.collect()
+                console.log(f"  TF-IDF shape: {X_tfidf.shape}")
 
                 raw_texts = df["Mutated Text Content"].fillna("").tolist()
+                del df
+                gc.collect()
+
                 if os.path.exists(CP_SBERT):
-                    tqdm.write(f"[checkpoint] Loading SBERT embeddings from {CP_SBERT}")
+                    console.log(f"[checkpoint] Loading SBERT embeddings from {CP_SBERT}")
                     X_sbert = sp.load_npz(CP_SBERT)
                 else:
-                    tqdm.write(
-                        "  Computing SBERT embeddings (this may take a while)..."
-                    )
-                    sbert_vecs = _sbert.encode(
-                        raw_texts,
-                        batch_size=256,
-                        show_progress_bar=True,
-                        convert_to_numpy=True,
-                    )
-                    X_sbert = sp.csr_matrix(sbert_vecs.astype(np.float32))
-                    sp.save_npz(CP_SBERT, X_sbert)
-                    tqdm.write(f"  SBERT shape: {X_sbert.shape}")
+                    console.log("  Computing SBERT embeddings (this may take a while)...")
+                    sbert_task = progress.add_task("  SBERT encoding", total=len(raw_texts))
+                    sbert_vecs = []
+                    for i in range(0, len(raw_texts), SBERT_BATCH):
+                        batch = raw_texts[i : i + SBERT_BATCH]
+                        sbert_vecs.append(
+                            _sbert.encode(
+                                batch,
+                                batch_size=SBERT_BATCH,
+                                show_progress_bar=False,
+                                convert_to_numpy=True,
+                            )
+                        )
+                        progress.advance(sbert_task, len(batch))
+                    progress.remove_task(sbert_task)
+                    sbert_vecs = np.vstack(sbert_vecs)
+                    X_sbert = sp.csr_matrix(sbert_vecs[:, :128].astype(np.float32))
+                    del sbert_vecs
+                    gc.collect()
+                    console.log(f"  SBERT shape: {X_sbert.shape}")
+                del raw_texts
+                gc.collect()
 
                 X = sp.hstack([X_tfidf, X_sbert], format="csr")
-                tqdm.write(f"  Combined feature shape: {X.shape}")
+                console.log(f"  Combined feature shape: {X.shape}")
                 del X_tfidf, X_sbert
+                gc.collect()
 
-                y = df["Sentiment"]
+                y = pd.read_parquet(CP_PREPROCESS, columns=["Sentiment"]).squeeze()
                 joblib.dump(tfidf, CP_TFIDF)
                 sp.save_npz(CP_X_FEATURES, X)
                 y.to_csv(CP_Y_LABELS, index=False)
-                pbar.update(1)
+                progress.advance(pipeline)
 
-            # save model
             if (
                 os.path.exists(CP_MODEL)
                 and os.path.exists(CP_X_TEST)
                 and os.path.exists(CP_Y_TEST)
             ):
-                tqdm.write(f"[checkpoint] Skipping training, reading {CP_MODEL}")
+                console.log(f"[checkpoint] Skipping training, reading {CP_MODEL}")
                 model = joblib.load(CP_MODEL)
-                pbar.update(2)
+                progress.advance(pipeline, 2)
             else:
-                pbar.set_description("Training model")
+                progress.update(pipeline, description="Training model")
                 X_train, X_test, y_train, y_test = train_test_split(
                     X, y, test_size=0.2, random_state=42, stratify=y
                 )
+                del X, y
+                gc.collect()
+
                 model = LogisticRegression(
                     class_weight="balanced",
                     solver="saga",
                     max_iter=1000,
-                    verbose=1,
+                    verbose=0,
                 )
+                fit_task = progress.add_task("  Fitting logistic regression", total=None)
                 model.fit(X_train, y_train)
-                pbar.update(1)
+                progress.remove_task(fit_task)
+                del X_train, y_train
+                gc.collect()
+                progress.advance(pipeline)
 
-                pbar.set_description("Saving files")
-                sp.save_npz(CP_X_TEST, X_test)
-                y_test.to_csv(CP_Y_TEST, index=False)
-                joblib.dump(model, CP_MODEL)
-                pbar.update(1)
+                progress.update(pipeline, description="Saving files")
+                saves = [
+                    ("X_test.npz", lambda: sp.save_npz(CP_X_TEST, X_test)),
+                    ("y_test.csv", lambda: y_test.to_csv(CP_Y_TEST, index=False)),
+                    ("sentiment_model.pkl", lambda: joblib.dump(model, CP_MODEL)),
+                ]
+                save_task = progress.add_task("  Saving artefacts", total=len(saves))
+                for name, fn in saves:
+                    progress.update(save_task, description=f"  Saving {name}")
+                    fn()
+                    progress.advance(save_task)
+                progress.remove_task(save_task)
+                progress.advance(pipeline)
 
-        tqdm.write("Training complete.")
+        console.log("[bold green]Training complete.")
         return model, tfidf
 
     except Exception:
-        import traceback
-
-        tqdm.write(traceback.format_exc())
+        console.print_exception()
         raise

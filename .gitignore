@@ -5,3 +5,5 @@ Model_Development/csv/*
 
 !Model_Development/csv/sentiment_model.pkl
 !Model_Development/csv/tfidf_dump.pkl
+
+.env

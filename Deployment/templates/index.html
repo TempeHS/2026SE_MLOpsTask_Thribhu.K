@@ -156,8 +156,12 @@
               name="text"
               rows="5"
               placeholder="Input your text"
+              maxlength="{{ text_max_length | default(2000) }}"
               required
-            ></textarea>
+            >{{ input_text | default('') }}</textarea>
+            <div class="form-text text-end">
+              Max {{ text_max_length | default(2000) }} characters.
+            </div>
           </div>
 
           <!-- Gauge -->
@@ -176,10 +180,17 @@
           </div>
         </div>
 
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
         <div class="text-center">
           <button type="submit" class="btn btn-primary px-4">Calculate</button>
         </div>
       </form>
+
+      {% if error_message %}
+      <div class="alert alert-warning mt-3" style="max-width: 650px; width: 100%;">
+        {{ error_message }}
+      </div>
+      {% endif %}
 
       {% if result %} {% set intensity = ((result.confidence - 50) / 50) %} {%
       if result.sentiment == 'Positive' %} {% set r = (255 * (1 - intensity)) |
@@ -194,37 +205,152 @@
         class="mt-4 alert text-center"
         style="background-color: rgb({{ r }}, {{ g }}, {{ b }}); border-color: rgb({{ r }}, {{ g }}, {{ b }}); max-width: 650px; width: 100%;"
       >
-        <strong>{{ result.sentiment }}</strong> — {{ ((result.confidence - 50) *
-        2) | round(2) }}% confidence
+        {{ ((result.confidence - 50) * 2) | round(0, 'ceil') | int }}% confident that this is <strong>{{ result.sentiment }}</strong>
       </div>
 
       <!-- Token highlight display -->
-      <div class="mt-3 token-display">
-        {% for token in result.token_weights %} {% set w = token.weight %} {% if
-        w > 0 %} {# green with intensity #} {% set ri = (255 * (1 - w)) | int %}
-        {% set gi = 255 %} {% set bi = (255 * (1 - w)) | int %} {% elif w < 0 %}
-        {# red with intensity #} {% set ri = 255 %} {% set gi = (255 * (1 + w))
-        | int %} {% set bi = (255 * (1 + w)) | int %} {% else %} {% set ri = 240
-        %} {% set gi = 240 %} {% set bi = 240 %} {% endif %}
-        <span
-          class="token"
-          style="background-color: rgb({{ ri }}, {{ gi }}, {{ bi }});"
+      {% set token_count = result.token_weights | length %}
+      {% set tokens_collapsed = token_count > 15 %}
+
+      <div class="mt-3" style="max-width: 650px; width: 100%;">
+        <button
+          type="button"
+          style="background:none; border:none; padding:0; font-size:0.8rem; color:#555; cursor:pointer; display:flex; align-items:center; gap:6px; margin-bottom:4px;"
+          onclick="var d=document.getElementById('tokenDisplay');var a=document.getElementById('tokenArrow');if(d.style.display==='none'){d.style.display='flex';a.textContent='▴';}else{d.style.display='none';a.textContent='▾';}"
         >
-          {{ token.word }}
-          <span class="token-tooltip">weight: {{ token.weight }}</span>
-        </span>
-        {% endfor %}
+          <span id="tokenArrow">{% if tokens_collapsed %}▾{% else %}▴{% endif %}</span>
+          Token weights ({{ token_count }} tokens)
+        </button>
+
+        <div
+          id="tokenDisplay"
+          class="token-display"
+          style="{% if tokens_collapsed %}display:none;{% endif %}"
+        >
+          {% for token in result.token_weights %}
+            {% set w = token.weight %}
+            {% if w > 0 %}
+              {% set ri = (255 * (1 - w)) | int %} {% set gi = 255 %} {% set bi = (255 * (1 - w)) | int %}
+            {% elif w < 0 %}
+              {% set ri = 255 %} {% set gi = (255 * (1 + w)) | int %} {% set bi = (255 * (1 + w)) | int %}
+            {% else %}
+              {% set ri = 240 %} {% set gi = 240 %} {% set bi = 240 %}
+            {% endif %}
+            <span class="token" style="background-color: rgb({{ ri }}, {{ gi }}, {{ bi }});">
+              {{ token.word }}
+              <span class="token-tooltip">weight: {{ token.weight }}</span>
+            </span>
+          {% endfor %}
+        </div>
+
+        <!-- Legend -->
+        <div class="weight-legend mt-2">
+          <span>Negative</span>
+          <div class="legend-gradient"></div>
+          <span>Positive</span>
+          <span style="margin-left: 8px; color: #aaa">| hover tokens for weight</span>
+        </div>
       </div>
 
-      <!-- Legend -->
-      <div class="weight-legend mt-2">
-        <span>Negative</span>
-        <div class="legend-gradient"></div>
-        <span>Positive</span>
-        <span style="margin-left: 8px; color: #aaa"
-          >| hover tokens for weight</span
+      <!-- SBERT Panel -->
+      {% if result and result.sbert_summary %}
+      {% set sb = result.sbert_summary %}
+      {% set vd = result.visual_data %}
+
+      <div class="mt-4" style="max-width: 650px; width: 100%;">
+        <button
+          class="btn btn-outline-secondary w-100 text-start d-flex justify-content-between align-items-center"
+          type="button"
+          onclick="var p=document.getElementById('sbertPanel');var a=document.getElementById('sbertArrow');if(p.style.display==='none'){p.style.display='block';a.textContent='▴';}else{p.style.display='none';a.textContent='▾';}"
         >
+          <span class="fw-semibold">SBERT Analysis</span>
+          <span class="text-muted" id="sbertArrow" style="font-size:0.8rem;">▾ click to expand</span>
+        </button>
+
+        <div id="sbertPanel" style="display:none;">
+          <div class="mt-2">
+
+        <!-- Modality contribution bar -->
+        <div class="card mb-3">
+          <div class="card-header fw-semibold">Feature Group Contributions (logit space)</div>
+          <div class="card-body">
+            {% set contrib_tips = {
+              'Intercept': 'The model\'s baseline bias before seeing any input. A negative value means the model leans negative by default based on training data.',
+              'TF-IDF': 'Calculates how frequently a word appears in the sentence, weighted by how rare it is across all training data. Good at picking up sentiment keywords.',
+              'SBERT': 'A deep language model that encodes the full sentence meaning into 128 numbers, capturing context that TF-IDF misses (e.g. negation, sarcasm).'
+            } %}
+            {% for item in vd.modality_contributions %}
+              {% set tip = contrib_tips[item.name] %}
+              {% set pct = ((item.value | abs) / ([vd.modality_contributions | map(attribute='value') | map('abs') | list | max, 0.001] | max) * 100) | round(1) %}
+              <div class="d-flex align-items-center mb-2 gap-2">
+                <span style="width:80px; font-size:0.85rem; cursor:help;" title="{{ tip }}">
+                  {{ item.name }} <span style="color:#aaa; font-size:0.7rem;">ⓘ</span>
+                </span>
+                <div style="flex:1; background:#f0f0f0; border-radius:6px; height:18px; position:relative;">
+                  {% if item.value >= 0 %}
+                  <div style="width:{{ pct }}%; background:#2ecc71; height:100%; border-radius:6px;"></div>
+                  {% else %}
+                  <div style="width:{{ pct }}%; background:#e74c3c; height:100%; border-radius:6px; margin-left:auto;"></div>
+                  {% endif %}
+                </div>
+                <span style="width:60px; font-size:0.8rem; text-align:right;">{{ item.value | round(4) }}</span>
+              </div>
+            {% endfor %}
+
+            <div class="mt-2 d-flex gap-3" style="font-size:0.8rem; color:#555;">
+              <span title="The raw score before converting to a probability. Above 0 → Positive, below 0 → Negative." style="cursor:help;">Total logit <span style="color:#aaa;">ⓘ</span>: <strong>{{ sb.total_logit }}</strong></span>
+              <span title="The probability the model assigns to this sentence being positive, derived from the logit via the sigmoid function." style="cursor:help;">P(Positive) <span style="color:#aaa;">ⓘ</span>: <strong>{{ (sb.prob_positive * 100) | round(2) }}%</strong></span>
+              <span title="Which feature types were used: hybrid = TF-IDF + SBERT combined." style="cursor:help;">Mode <span style="color:#aaa;">ⓘ</span>: <strong>{{ sb.mode }}</strong></span>
+              <span title="The length (L2 norm) of the SBERT sentence vector. Higher values often indicate richer or more emotionally charged text." style="cursor:help;">Embedding L2 <span style="color:#aaa;">ⓘ</span>: <strong>{{ sb.embedding_norm_l2 | round(3) }}</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Top SBERT dimensions -->
+        {% if sb.top_sbert_dimensions %}
+        <div class="card">
+          <div class="card-header fw-semibold">Top Influential SBERT Dimensions</div>
+          <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0" style="font-size:0.82rem;">
+              <thead class="table-light">
+                <tr>
+                  <tr>
+                  <th title="The index of the SBERT embedding dimension (out of 128 total)." style="cursor:help;">Dim ⓘ</th>
+                  <th title="The activation value of this dimension for the input sentence — how strongly SBERT fired on it." style="cursor:help;">Embedding value ⓘ</th>
+                  <th title="The weight the logistic regression model learned for this dimension during training." style="cursor:help;">Coef ⓘ</th>
+                  <th title="Embedding value × Coefficient. Positive = pushes toward Positive sentiment, Negative = pushes toward Negative." style="cursor:help;">Contribution ⓘ</th>
+                  <th title="Whether this dimension's contribution pulls the prediction toward Positive or Negative." style="cursor:help;">Direction ⓘ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for d in sb.top_sbert_dimensions %}
+                <tr>
+                  <td>#{{ d.dimension }}</td>
+                  <td>{{ d.value | round(4) }}</td>
+                  <td>{{ d.coef | round(4) }}</td>
+                  <td>
+                    <span style="color: {% if d.contribution >= 0 %}#27ae60{% else %}#e74c3c{% endif %}; font-weight:600;">
+                      {{ d.contribution | round(4) }}
+                    </span>
+                  </td>
+                  <td>
+                    {% if d.contribution >= 0 %}
+                    <span class="badge" style="background:#2ecc71; color:#fff;">Positive</span>
+                    {% else %}
+                    <span class="badge" style="background:#e74c3c; color:#fff;">Negative</span>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %}
+          </div>
+        </div>
       </div>
+      {% endif %}
 
       <script>
         document.getElementById("gaugeNeedle").style.top = "{{ needle_pct }}%";
