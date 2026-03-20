@@ -68,7 +68,12 @@ def _make_progress() -> Progress:
     )
 
 
-def train(csv_folder: str = None):
+_VALID_MODES = ("hybrid", "tfidf_only", "sbert_only")
+
+
+def train(csv_folder: str = None, mode: str = "hybrid"):
+    if mode not in _VALID_MODES:
+        raise ValueError(f"Invalid mode '{mode}'. Must be one of {_VALID_MODES}")
     path = csv_folder or "csv"
     if os.path.basename(os.path.normpath(path)) != "csv":
         path = os.path.join(path, "csv")
@@ -78,11 +83,11 @@ def train(csv_folder: str = None):
     CP_PREPROCESS = f"{path}/preprocess.parquet"
     CP_TFIDF = f"{path}/tfidf_dump.pkl"
     CP_SBERT = f"{path}/sbert_embeddings.npz"
-    CP_X_FEATURES = f"{path}/x_features.npz"
+    CP_TFIDF_FEATURES = f"{path}/x_tfidf_features.npz"
     CP_Y_LABELS = f"{path}/y_sentiment_labels.csv"
-    CP_X_TEST = f"{path}/X_test.npz"
+    CP_X_TEST = f"{path}/X_test_{mode}.npz"
     CP_Y_TEST = f"{path}/y_test.csv"
-    CP_MODEL = f"{path}/sentiment_model.pkl"
+    CP_MODEL = f"{path}/sentiment_model_{mode}.pkl"
 
     stages = [
         "Loading datasets",
@@ -263,12 +268,14 @@ def train(csv_folder: str = None):
                 gc.collect()
 
             if (
-                os.path.exists(CP_X_FEATURES)
+                os.path.exists(CP_TFIDF_FEATURES)
+                and os.path.exists(CP_SBERT)
                 and os.path.exists(CP_TFIDF)
                 and os.path.exists(CP_Y_LABELS)
             ):
-                console.log(f"[checkpoint] Skipping vectorising, reading {CP_X_FEATURES}")
-                X = sp.load_npz(CP_X_FEATURES)
+                console.log("[checkpoint] Skipping vectorising, reading cached TF-IDF + SBERT features")
+                X_tfidf = sp.load_npz(CP_TFIDF_FEATURES)
+                X_sbert = sp.load_npz(CP_SBERT)
                 tfidf = joblib.load(CP_TFIDF)
                 y = pd.read_csv(CP_Y_LABELS).squeeze()
                 progress.advance(pipeline)
@@ -325,16 +332,22 @@ def train(csv_folder: str = None):
                 del raw_texts
                 gc.collect()
 
-                X = sp.hstack([X_tfidf, X_sbert], format="csr")
-                console.log(f"  Combined feature shape: {X.shape}")
-                del X_tfidf, X_sbert
-                gc.collect()
-
                 y = pd.read_parquet(CP_PREPROCESS, columns=["Sentiment"]).squeeze()
                 joblib.dump(tfidf, CP_TFIDF)
-                sp.save_npz(CP_X_FEATURES, X)
+                sp.save_npz(CP_TFIDF_FEATURES, X_tfidf)
+                sp.save_npz(CP_SBERT, X_sbert)
                 y.to_csv(CP_Y_LABELS, index=False)
                 progress.advance(pipeline)
+
+            if mode == "hybrid":
+                X = sp.hstack([X_tfidf, X_sbert], format="csr")
+            elif mode == "sbert_only":
+                X = X_sbert
+            else:  # tfidf_only
+                X = X_tfidf
+            console.log(f"  Feature matrix shape for mode='{mode}': {X.shape}")
+            del X_tfidf, X_sbert
+            gc.collect()
 
             if (
                 os.path.exists(CP_MODEL)

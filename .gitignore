@@ -3,8 +3,15 @@ Model_Development/csv/*
 
 **/__pycache__/
 
+!Model_Development/csv/sentiment_model_hybrid.pkl
+!Model_Development/csv/sentiment_model_tfidf_only.pkl
+!Model_Development/csv/sentiment_model_sbert_only.pkl
 !Model_Development/csv/sentiment_model.pkl
 !Model_Development/csv/tfidf_dump.pkl
+!Model_Development/csv/X_test_hybrid.npz
+!Model_Development/csv/X_test_tfidf_only.npz
+!Model_Development/csv/X_test_sbert_only.npz
+!Model_Development/csv/y_test.csv
 
 .env
 *.db
